@@ -1,0 +1,3 @@
+pygame.mixer.init()
+pygame.mixer.music.load(r'Directory')
+pygame.mixer.music.play()
