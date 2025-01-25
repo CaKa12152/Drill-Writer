@@ -3,7 +3,7 @@ import json
 import pygame
 from tkinter import *
 from PIL import Image, ImageTk
-import time, traceback
+import time, traceback, math
 
 # ---------------------------- Global Variables ----------------------------
 
@@ -39,57 +39,282 @@ for i in range(9):
         hash_x.append(hash_x[-1]+7.5)
     for i in range(5):
         hash_x.append(hash_x[-1]+8)
-# ------------------------------- Static Playback -------------------------------
+# ------------------------------- Smooth Playback -------------------------------
 
-def static_playback():
-    playM(None)
+def smooth_playback():
+    global current_set, is_transitioning
+    is_transitioning = False  # Track if we're currently transitioning
+
+    def move_marchers_in_line(start_set, end_set, tempo, beats):
+        """Moves the marchers smoothly in a straight line from start_set to end_set."""
+        global is_transitioning
+        try:
+            if is_transitioning:
+                return  # Prevent overlapping transitions
+
+            is_transitioning = True  # Mark the start of a transition
+
+            # Get initial positions of marchers at start_set
+            start_positions = {marcher: marcher.return_coords("xy") for marcher in marchers}
+
+            # Move marchers to end_set positions
+            for marcher in marchers:
+                marcher.go_to_set(end_set)
+
+            # Get the final positions at end_set
+            end_positions = {marcher: marcher.return_coords("xy") for marcher in marchers}
+
+            # Calculate movement vectors (difference in x and y)
+            movement_vectors = {
+                marcher: [
+                    end_positions[marcher][0] - start_positions[marcher][0],  # x movement
+                    end_positions[marcher][1] - start_positions[marcher][1]  # y movement
+                ]
+                for marcher in marchers
+            }
+
+            # Duration of each beat in milliseconds
+            beat_duration_ms = 60 / tempo * 1000
+            total_duration = beat_duration_ms * beats  # Total duration in ms for the movement
+
+            # Steps to break the movement into smooth intervals (50ms per step)
+            steps = max(int(total_duration / 50), 1)
+
+            # Function to update positions gradually (smooth movement)
+            def update_positions(step):
+                fraction = step / float(steps)
+                for marcher in marchers:
+                    new_x = start_positions[marcher][0] + movement_vectors[marcher][0] * fraction
+                    new_y = start_positions[marcher][1] + movement_vectors[marcher][1] * fraction
+                    marcher.set_position(new_x, new_y)
+
+                # Continue updating until all steps are done
+                if step < steps:
+                    project.after(50, update_positions, step + 1)
+                else:
+                    # After completing all steps, ensure marchers are at final positions
+                    for marcher in marchers:
+                        final_x, final_y = end_positions[marcher]
+                        marcher.set_position(final_x, final_y)
+
+                    # Once animation is complete, proceed to the next set
+                    move_to_next_set(start_set + 1)  # Move to the next set after animation completes
+
+            # Start the update process
+            update_positions(0)
+
+        except Exception as e:
+            print(f"Error in move_marchers_in_line: {e}")
+            traceback.print_exc()
+
     def play_set(i):
         try:
-
+            # Load project data
             with open(f"src/Projects/{proj_name}/project.json", "r") as f:
                 data = json.load(f)
 
-            # Access the set data using str(i)
+            # Check if the set exists before accessing it
+            if str(i) not in data:
+                print(f"Set {i} does not exist.")
+                return  # Skip this set if it doesn't exist
+
+            # Get tempo and beats for the current set
             tempo2 = data[str(i)]["Tempo"]
             beats = data[str(i)]["Beats"]
 
-            wait_time = (60 / tempo2) * (beats+1)
+            # Call move_marchers_in_line with correct arguments (tempo and beats)
+            move_marchers_in_line(i, i + 1, tempo2, beats)
 
-            # Convert wait_time to milliseconds and then to an integer
-            wait_time_ms = int(wait_time * 1000)  # Convert float to int
+            # Calculate wait time between sets (in seconds)
+            wait_time = (60 / tempo2) * (beats + 1)
+            wait_time_ms = int(wait_time * 1000)  # Convert to milliseconds
 
-            # Schedule the next action after the wait time
-            project.after(wait_time_ms, move_to_next_set, i)  # Pass integer milliseconds
+            # Schedule the next set after the wait time, only if not at last set
+            if i + 1 < amount_of_sets:  # Only continue if not the last set
+                project.after(wait_time_ms, play_set, i + 1)  # Move to the next set after wait time
+            else:
+                print("Playback finished.")  # Stop playback after the last set
+
         except Exception as e:
             print(f"Error in play_set for set {i}: {e}")
             traceback.print_exc()
 
     def move_to_next_set(i):
+        """Move to the next set or stop if it's the last set."""
+        global is_transitioning
         try:
-            print(i)
-            for c in marchers:
-                set_value.delete("1.0", END)
-                set_value.insert("1.0", str(i))
-                c.go_to_set(i)
+            # Ensure that we don't move past the last set
+            if i < amount_of_sets:  # Only move to the next set if it's not the last set
+                # Move marchers to the new set's position
+                for marcher in marchers:
+                    marcher.go_to_set(i)
 
-            # Continue with the next set after the current one is done
-            if i + 1 < amount_of_sets:
-                play_set(i + 1)
+                # Schedule the next set if we're not at the final set
+                if i + 1 < amount_of_sets:
+                    project.after(1, play_set, i + 1)  # Proceed to the next set
+                else:
+                    print("Playback finished.")  # Stop playback after the final set
+
+            # Once transition is done, reset transition flag
+            is_transitioning = False
         except Exception as e:
             print(f"Error in move_to_next_set for set {i}: {e}")
-            traceback.print_exc()  # This will print the full traceback
+            traceback.print_exc()
 
     try:
+        # Load the total number of sets
         with open(f"src/Projects/{proj_name}/project.json", "r") as f:
             global amount_of_sets
             amount_of_sets = len(json.load(f))
 
-        # Start from the first set
-        play_set(0)
+        # Start from the first set (set 0)
+        current_set = 0
+        play_set(current_set)
 
     except Exception as e:
-        print(f"Error in static_playback initialization: {e}")
-        traceback.print_exc()  # This will print the full traceback
+        print(f"Error in smooth_playback initialization: {e}")
+        traceback.print_exc()
+
+# ------------------------------- Static Playback -------------------------------
+
+def smooth_playback():
+    global current_set, is_transitioning
+    is_transitioning = False  # Track if we're currently transitioning
+
+    def move_marchers_in_line(start_set, end_set, tempo, beats):
+        """Moves the marchers smoothly in a straight line from start_set to end_set."""
+        global is_transitioning
+        try:
+            if is_transitioning:
+                return  # Prevent overlapping transitions
+
+            is_transitioning = True  # Mark the start of a transition
+
+            # Get initial positions of marchers at start_set
+            start_positions = {marcher: marcher.return_coords("xy") for marcher in marchers}
+
+            # Move marchers to end_set positions
+            for marcher in marchers:
+                marcher.go_to_set(end_set)
+
+            # Get the final positions at end_set
+            end_positions = {marcher: marcher.return_coords("xy") for marcher in marchers}
+
+            # Calculate movement vectors (difference in x and y)
+            movement_vectors = {
+                marcher: [
+                    end_positions[marcher][0] - start_positions[marcher][0],  # x movement
+                    end_positions[marcher][1] - start_positions[marcher][1]  # y movement
+                ]
+                for marcher in marchers
+            }
+
+            # Duration of each beat in milliseconds
+            beat_duration_ms = 60 / tempo * 1000
+            total_duration = beat_duration_ms * beats  # Total duration in ms for the movement
+
+            # Steps to break the movement into smooth intervals (50ms per step)
+            steps = max(int(total_duration / 50), 1)
+
+            # Function to update positions gradually (smooth movement)
+            def update_positions(step):
+                fraction = step / float(steps)
+                for marcher in marchers:
+                    new_x = start_positions[marcher][0] + movement_vectors[marcher][0] * fraction
+                    new_y = start_positions[marcher][1] + movement_vectors[marcher][1] * fraction
+                    marcher.set_position(new_x, new_y)
+
+                # Continue updating until all steps are done
+                if step < steps:
+                    project.after(50, update_positions, step + 1)
+                else:
+                    # After completing all steps, ensure marchers are at final positions
+                    for marcher in marchers:
+                        final_x, final_y = end_positions[marcher]
+                        marcher.set_position(final_x, final_y)
+
+                    # Once animation is complete, proceed to the next set
+                    move_to_next_set(start_set + 1)  # Move to the next set after animation completes
+
+            # Start the update process
+            update_positions(0)
+
+        except Exception as e:
+            print(f"Error in move_marchers_in_line: {e}")
+            traceback.print_exc()
+
+    def play_set(i):
+        try:
+            # Load project data
+            with open(f"src/Projects/{proj_name}/project.json", "r") as f:
+                data = json.load(f)
+
+            # Check if the set exists before accessing it
+            if str(i) not in data:
+                print(f"Set {i} does not exist.")
+                return  # Skip this set if it doesn't exist
+
+            # Get tempo and beats for the current set
+            tempo2 = data[str(i)]["Tempo"]
+            beats = data[str(i)]["Beats"]
+
+            # Call move_marchers_in_line with correct arguments (tempo and beats)
+            move_marchers_in_line(i, i + 1, tempo2, beats)
+
+            # Calculate wait time between sets (in seconds), adjusted to account for the transition time
+            wait_time = (60 / tempo2) * (beats + 1)  # Original wait time based on tempo and beats
+            wait_time_ms = int(wait_time * 1000)  # Convert to milliseconds
+
+            # Ensure the transition duration is included in the wait time
+            transition_duration_ms = wait_time_ms + (60 / tempo2 * beats)  # Add time for transition
+
+            # Schedule the next set after the total wait time (includes transition)
+            if i + 1 < amount_of_sets:  # Only continue if not the last set
+                project.after(transition_duration_ms, play_set, i + 1)  # Proceed to the next set after wait time
+            else:
+                print("Playback finished.")  # Stop playback after the last set
+
+        except Exception as e:
+            print(f"Error in play_set for set {i}: {e}")
+            traceback.print_exc()
+
+    def move_to_next_set(i):
+        """Move to the next set or stop if it's the last set."""
+        global is_transitioning
+        try:
+            # Ensure that we don't move past the last set
+            if i < amount_of_sets:  # Only move to the next set if it's not the last set
+                # Move marchers to the new set's position
+                for marcher in marchers:
+                    marcher.go_to_set(i)
+
+                # Schedule the next set if we're not at the final set
+                if i + 1 < amount_of_sets:
+                    project.after(1, play_set, i + 1)  # Proceed to the next set
+                else:
+                    print("Playback finished.")  # Stop playback after the final set
+            else:
+                print(f"Attempted to move to a non-existent set {i}. Playback finished.")
+
+            # Once transition is done, reset transition flag
+            is_transitioning = False
+        except Exception as e:
+            print(f"Error in move_to_next_set for set {i}: {e}")
+            traceback.print_exc()
+
+    try:
+        # Load the total number of sets
+        with open(f"src/Projects/{proj_name}/project.json", "r") as f:
+            global amount_of_sets
+            amount_of_sets = len(json.load(f))
+
+        # Start from the first set (set 0)
+        current_set = 0
+        play_set(current_set)
+
+    except Exception as e:
+        print(f"Error in smooth_playback initialization: {e}")
+        traceback.print_exc()
 
 
 
@@ -184,6 +409,11 @@ def changebeats():
 def changetempo():
     change_tempo_of_set(current_set, tempo_input.get("1.0", "end-1c").strip())
 
+# ----------------------- Remove Marcher -------------------------
+
+def remove_marcher(event=None):
+    selected_marcher.remove_self()
+
 # ----------------------- Properties Tab -------------------------
 
 def properties_tab(event):
@@ -238,6 +468,8 @@ def properties_tab(event):
         name_value.place(x=105, y=195)
         properties_tab_items.append(name_value)
 
+        remove_marcher_button = Button(tab, text="Remove", fg="Red", font=("Arial", 10), command=remove_marcher)
+        remove_marcher_button.place(x=50, y=195)
 
         seperator = tab.create_line(0, 230, 250, 230, fill="white", width=2)
         properties_tab_items.append(seperator)
@@ -492,10 +724,10 @@ class Marchers():
         try:
             tab.itemconfig(selected_marcher_label, text=f"Selected Marcher: {self.stage_name}")
 
-            x_value_marcher.delete("1.0", "end")  # Use "end" to refer to the end of the content in a Text widget
+            x_value_marcher.delete("1.0", "end")
             x_value_marcher.insert("1.0", str(canvas.coords(self.marcher)[0]))  # Insert the X coordinate
 
-            y_value_marcher.delete("1.0", "end")  # Same for the Y coordinate
+            y_value_marcher.delete("1.0", "end")
             y_value_marcher.insert("1.0", str(canvas.coords(self.marcher)[1]))  # Insert the Y coordinate
 
             name_value.delete("1.0", "end")
@@ -503,41 +735,32 @@ class Marchers():
 
         except:
             pass
-        #except:
-         #   pass
 
     def move(self, dx, dy):
         # Move the marcher on the canvas
         canvas.move(self.marcher, dx, dy)
         canvas.move(self.marcher_label, dx, dy)
 
-        # Read the current data from the JSON file
         try:
             with open(f"src/Projects/{proj_name}/DOTS/{self.name}.json", "r") as c3:
                 existing_data3 = json.load(c3)
 
-            #
-            # Update the coordinates of the marcher
             existing_data3[str(current_set)]['x'] = canvas.coords(self.marcher)[0]
             existing_data3[str(current_set)]['y'] = canvas.coords(self.marcher)[1]
 
-
-
-            # Overwrite the file with the updated data (replacing the content)
             with open(f"src/Projects/{proj_name}/DOTS/{self.name}.json", "w") as c3:
                 json.dump(existing_data3, c3, indent=4)  # This replaces the file content
 
         except json.JSONDecodeError as e:
             pass
-            # Handle the error (log it, raise it, etc.)
         except Exception as e:
             pass
 
         try:
-            x_value_marcher.delete("1.0", "end")  # Use "end" to refer to the end of the content in a Text widget
-            x_value_marcher.insert("1.0", str(canvas.coords(self.marcher)[0]))  # Insert the X coordinate
+            x_value_marcher.delete("1.0", "end")
+            x_value_marcher.insert("1.0", str(canvas.coords(self.marcher)[0]))
 
-            y_value_marcher.delete("1.0", "end")  # Same for the Y coordinate
+            y_value_marcher.delete("1.0", "end")
             y_value_marcher.insert("1.0", str(canvas.coords(self.marcher)[1]))
         except:
             pass
@@ -548,7 +771,7 @@ class Marchers():
 
     def check_if_selected(self):
         if selected_marcher != self:
-            canvas.itemconfig(self.marcher, image=marcher1)  # Reset to original image if not selected
+            canvas.itemconfig(self.marcher, image=marcher1)
 
     def set_position(self, x, y):
         canvas.coords(self.marcher, x, y)
@@ -558,7 +781,7 @@ class Marchers():
         canvas.coords(self.marcher, x, canvas.coords(self.marcher)[1])
         canvas.coords(self.marcher_label, x, canvas.coords(self.marcher)[1] - 15)
         try:
-            x_value_marcher.delete("1.0", "end")  # Use "end" to refer to the end of the content in a Text widget
+            x_value_marcher.delete("1.0", "end")
             x_value_marcher.insert("1.0", str(canvas.coords(self.marcher)[0]))
         except:
             pass
@@ -571,14 +794,12 @@ class Marchers():
         with open(f"src/Projects/{proj_name}/DOTS/{self.name}.json", "w") as c:
             json.dump(existing_data, c, indent=4)
 
-
-
     def set_y(self, y):
         canvas.coords(self.marcher, canvas.coords(self.marcher)[0], y)
         canvas.coords(self.marcher_label, canvas.coords(self.marcher)[0], y - 15)
 
         try:
-            y_value_marcher.delete("1.0", "end")  # Use "end" to refer to the end of the content in a Text widget
+            y_value_marcher.delete("1.0", "end")
             y_value_marcher.insert("1.0", str(canvas.coords(self.marcher)[1]))
         except:
             pass
@@ -600,45 +821,60 @@ class Marchers():
             return [canvas.coords(self.marcher)[0], canvas.coords(self.marcher)[1]]
 
     def add_set2(self):
-
         with open(f"src/Projects/{proj_name}/DOTS/{self.name}.json", "r+") as f:
             existing_data = json.load(f)
 
             new_data = {f"{current_set}":
                             {
-                             "x":
-                                 canvas.coords(self.marcher)[0],
-                             "y":
-                                 canvas.coords(self.marcher)[1]
+                             "x": canvas.coords(self.marcher)[0],
+                             "y": canvas.coords(self.marcher)[1]
                              }
                         }
 
             existing_data.update(new_data)
 
             f.seek(0)
-
             json.dump(existing_data, f, indent=4)
-
             f.truncate()
 
     def go_to_set(self, set_val):
+        """Move the marcher to the coordinates of a specific set."""
+        try:
+            # Read the marcher set data from the corresponding JSON file
+            with open(f"src/Projects/{proj_name}/DOTS/{self.name}.json", "r") as f:
+                data = json.load(f)
 
-        with open(f"src/Projects/{proj_name}/DOTS/{self.name}.json", "r") as f:
-            data = json.load(f)
+            # If the set doesn't exist, default to set 0
+            if str(set_val) not in data:
+                print(f"Set {set_val} does not exist for marcher {self.name}. Falling back to set 0.")
+                set_val = 0  # Default to set 0 if set does not exist
 
+            # Retrieve the x and y coordinates for the given set
             x_val = data[str(set_val)]["x"]
             y_val = data[str(set_val)]["y"]
 
+            # Move the marcher to the new position
             canvas.coords(self.marcher, x_val, y_val)
-            canvas.coords(self.marcher_label, x_val, y_val - 15)
+            canvas.coords(self.marcher_label, x_val, y_val - 15)  # Adjust label position
 
-            f.close()
-
-
-
+        except Exception as e:
+            print(f"Error in go_to_set for marcher {self.name}: {e}")
+            traceback.print_exc()
 
     def get_name(self):
         return self.name
+
+    def remove_self(self):
+        os.remove(f"src/Projects/{proj_name}/DOTS/{self.name}.json")
+        canvas.delete(self.marcher)
+        canvas.delete(self.marcher_label)
+        marchers.remove(self.marcher)
+        del self
+
+    def get_position(self):
+        """Get the current position of the marcher."""
+        return canvas.coords(self.marcher)
+
 
 
 
@@ -706,7 +942,7 @@ def load_GUI():
     set_value.place(x=(997 - 37) // 2, y=700)
     set_value.insert("1.0", "0")
 
-    static_playback_button = Button(canvas, text="Playback", command=static_playback)
+    static_playback_button = Button(canvas, text="smooth Playback", command=smooth_playback)
     static_playback_button.place(x=150, y=700)
 
     # Bind music player click to toggle play/pause
